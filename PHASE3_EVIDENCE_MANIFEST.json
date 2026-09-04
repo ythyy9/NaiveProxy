@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-03T05:47:50-07:00",
+  "status": "BLOCKED_NO_ISOLATED_LAB",
+  "root_cause": "UNRESOLVED",
+  "migration_status": "MIGRATION_UNKNOWN",
+  "production_mutated": false,
+  "lab": {
+    "available": false,
+    "required_type": "Debian 12 amd64 full systemd VM",
+    "hypervisor_present": false,
+    "hyper_v_management_available": false,
+    "vmware_available": false,
+    "qemu_available": false,
+    "multipass_available": false,
+    "wsl_present_but_disallowed_for_final_runtime_conclusion": true
+  },
+  "cold_backup": {
+    "included_in_redacted_package": false,
+    "size_bytes": 197519360,
+    "sha256": "8e468dcaabe86e6b81d4f6d4b56bd07d8652b3d08ab31bad31b0afcb589958de",
+    "hash_match": true,
+    "tar_readable": true,
+    "entry_count": 19,
+    "absolute_path_count": 0,
+    "traversal_path_count": 0,
+    "required_components_present": true
+  },
+  "inputs": [
+    {
+      "name": "Codex taskbook",
+      "size_bytes": 36887,
+      "sha256": "6b2571f8b0934abc2c76d5aaf6905a9ca96a629698a593890a73b2a9253a7c75"
+    },
+    {
+      "name": "PHASE2_SECURITY_AND_3XUI_UPGRADE_REPORT.md",
+      "size_bytes": 12169,
+      "sha256": "c37f57d885c0232c68404243a97779382ba9499ea02a1304171b0efd2ff6bb13"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "PHASE3_XRAY_MISSING_ROOT_CAUSE_REPORT.md",
+      "size_bytes": 6250,
+      "sha256": "bc3057aaa91e84f64c9ffd8019307b6d3d67a2f6886e08cd65860c0d45403d77"
+    },
+    {
+      "name": "PHASE3_EXPERIMENT_MATRIX.md",
+      "size_bytes": 1942,
+      "sha256": "5e508d89de448776dc2ee87e2a23a3988ed929ca667580fdd1b6dd25d60939bb"
+    },
+    {
+      "name": "PHASE3_DO_NOT_RETRY.md",
+      "size_bytes": 815,
+      "sha256": "f13ecdf4630f37121f1ac24761eb01f9e1d5e6650888a6dccf5fd684f557b771"
+    }
+  ],
+  "experiments": {
+    "E0": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E1": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E2": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E3": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E4": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E5": "NOT_RUN_BLOCKED_NO_ISOLATED_LAB",
+    "E6": "NOT_RUN_NOT_REACHED"
+  },
+  "sensitive_material_in_manifest": false,
+  "github_issue_submitted": false
+}

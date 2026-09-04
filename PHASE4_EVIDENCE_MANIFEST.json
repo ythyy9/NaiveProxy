@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-03T06:07:24-07:00",
+  "status": "BLOCKED_HOST_ADMIN_REQUIRED",
+  "phase4_root": "PHASE4_20260903-060724",
+  "production_login_performed": false,
+  "production_mutated": false,
+  "root_cause": "UNRESOLVED",
+  "migration_status": "MIGRATION_UNKNOWN",
+  "host_gate": {
+    "is_admin": false,
+    "virtualization_firmware_enabled": true,
+    "slat": true,
+    "hypervisor_present": false,
+    "logical_processors": 16,
+    "total_memory_gib": 31.86,
+    "free_memory_gib": 19.15,
+    "f_drive_free_gib": 873.76,
+    "resource_gate_passed": true,
+    "admin_gate_passed": false
+  },
+  "inputs": [
+    {
+      "name": "Phase 4 taskbook",
+      "sha256": "5712b1636a4bd58e89a17b5cfc93bcdfd0968753415783677fea500cdb3d4c4d"
+    },
+    {
+      "name": "PHASE3_REDACTED_EVIDENCE.tar.gz",
+      "size_bytes": 5303,
+      "sha256": "e1e5927a5d58a42352bac692fc853477a31f05b1b31da7d530a5a19a30700da1",
+      "hash_match": true
+    },
+    {
+      "name": "US formal cold backup",
+      "size_bytes": 197519360,
+      "sha256": "8e468dcaabe86e6b81d4f6d4b56bd07d8652b3d08ab31bad31b0afcb589958de",
+      "hash_match": true,
+      "included_in_redacted_package": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "PHASE4_LAB_PROVISION_AND_ROOT_CAUSE_REPORT.md",
+      "size_bytes": 4245,
+      "sha256": "c0b765c04935db91562cb589a8091dc6a535247777827b438a12f958a7c3dde4"
+    },
+    {
+      "name": "PHASE4_EXPERIMENT_MATRIX.md",
+      "size_bytes": 902,
+      "sha256": "0aacc6158067c302033ba879894bef5ba854ae5721633144eeaadb3e4431f01c"
+    },
+    {
+      "name": "PHASE4_HOST_CHANGE_LOG.md",
+      "size_bytes": 947,
+      "sha256": "acf63bc6296251ec044188644ce13558647f5bafac105fbb42899faf45ffc5a2"
+    },
+    {
+      "name": "PHASE4_CLEANUP_REPORT.md",
+      "size_bytes": 604,
+      "sha256": "4745aeaa1bd95e72c951edd7df7065b156eeb5bcd4aef5f829ac339afe9ffdb1"
+    },
+    {
+      "name": "PHASE4_DO_NOT_RETRY.md",
+      "size_bytes": 549,
+      "sha256": "7231b0d50e4644dac34294776e3ba341a8a1595338bb922dd3470c3fb2d965dd"
+    },
+    {
+      "name": "PHASE4_20260903-060724/public/RESUME.md",
+      "size_bytes": 497,
+      "sha256": "a3ccfed611b111eb128a05632b220ce64297842cd09e5025aadf5aac92396a3e"
+    }
+  ],
+  "experiments": {
+    "E0": "NOT_RUN_BLOCKED_HOST_ADMIN_REQUIRED",
+    "E1": "NOT_REACHED",
+    "E2": "NOT_REACHED",
+    "E3": "NOT_REACHED",
+    "E4": "NOT_REACHED",
+    "E5": "NOT_REACHED",
+    "E6": "NOT_REACHED"
+  },
+  "redacted_evidence_package": {
+    "name": "PHASE4_REDACTED_EVIDENCE.tar.gz",
+    "size_bytes": 3712,
+    "sha256": "4d47f0958ca4ffe795dd7ee9a03a4f9c237a9ec7c39b97549030285fcb9a355b",
+    "entry_count": 5,
+    "manifest_included": false,
+    "sensitive_material_included": false
+  },
+  "virtualbox_installed": false,
+  "debian_iso_downloaded": false,
+  "vm_created": false,
+  "network_created": false,
+  "temporary_secret_created": false,
+  "github_issue_submitted": false
+}
