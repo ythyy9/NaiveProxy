@@ -1,0 +1,22 @@
+[Unit]
+Description=Hysteria 2 %i exit with Salamander and port hopping
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=naiveproxy
+Group=naiveproxy
+ExecStart=/opt/naiveproxy/hysteria server --config /etc/naiveproxy/current/hy2-%i.json --log-level warn
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

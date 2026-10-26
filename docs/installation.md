@@ -1,134 +1,149 @@
-# 从零安装
+# 安装四节点订阅套件
 
-以下命令在自己的 VPS 上运行。支持 Debian 12/13、Ubuntu 22.04/24.04 的 x86_64 + systemd 环境。下面的 `203.0.113.10`、`proxy.example.com`、`you@example.com` 都是占位符，必须替换。
+给 Codex 执行前先读 [任务书](CODEX-DEPLOY.md)。目标是每个客户端一个 HTTPS 链接、四个可用节点。以下命令在自己的 Linux x86_64 + systemd VPS 上以 root 运行。所有示例 IP、域名、邮箱均需替换。
 
-## 1. 检查端口并下载仓库
+## 1. 盘点与准备
 
-以 root 登录，或先执行 `sudo -i`：
-
-```bash
+~~~bash
 uname -m
 ss -lntup
-```
+ip -4 route show default
+~~~
 
-TCP **443** 需要交给本教程的独立服务；**20190** 只用作回环地址上的 Caddy 管理接口，也不能被占用。TCP **80** 用于 Certbot standalone 验证和续期，平时可以没有进程监听，但每次续期时必须空闲。
+需要空闲的 TCP 443、本机 TCP 20190 和两组 UDP 范围：28000–28031、28100–28131。TCP 80 供 Certbot standalone 申请与续期，必须在验证时空闲且公网可达。有旧服务占用时先明确迁移方案，不直接停止未知服务。
 
-若已有网站、REALITY、面板等占用 443，先决定如何迁移那个服务。不要直接运行 `kill`，也不要为了本教程停止不认识的服务。安装脚本遇到占用会退出。HY2 的 UDP 端口和这里的 TCP 443 是不同端口空间，可以共存。
+在商家安全组和现有系统防火墙中放行 TCP 80/443、上述两个 UDP 范围，并保留 SSH。不要暴露 20190 或本机 SOCKS 桥端口。云安全组须允许全部跳跃入口；系统过滤规则须兼容重定向后的两个首端口。不要清空或重置防火墙。
 
-在 VPS 商家安全组和系统防火墙中放行 TCP 80、443；保留自己的 SSH 端口。**不要放行 20190 或后文的 28400**。如果系统已启用 UFW，可以添加 `ufw allow 80/tcp` 和 `ufw allow 443/tcp`；不要为了照抄示例盲目启用、重置防火墙。
-
-```bash
+~~~bash
 apt-get update
-apt-get install -y git curl ca-certificates openssl python3 python3-venv xz-utils
+apt-get install -y git curl ca-certificates openssl python3 python3-venv xz-utils nftables
 git clone https://github.com/ythyy9/NaiveProxy.git /root/NaiveProxy
 cd /root/NaiveProxy
-```
+~~~
 
-有域名时，把 A 记录指向 VPS IPv4，使用仅 DNS 解析。未配置 IPv6 就不要留错误的 AAAA 记录。不要把普通 CDN 的代理开关当作 Naive CONNECT 隧道支持。
+Hysteria 内置端口范围会创建自己的重定向规则，并在正常停止时移除。不要再叠加手动 NAT 跳跃规则。本套件只接入 IPv4；域名的 A 记录应指向 VPS，没有正确配置 IPv6 就不要保留错误 AAAA。普通 CDN 的代理开关不等于支持 CONNECT 隧道。
 
-## 2. 安装 Certbot
+## 2. 先验证真实家宽出口
 
-为本教程使用独立虚拟环境，不替换系统已有 Certbot：
+按 [家宽准备](optional-routes.md)建立带认证的本机 SOCKS5 桥，先用实际请求确认出口 IP 与家宽相符。这个桥必须仅监听 127.0.0.1，并在上游故障时失败，不能自动回落到直出。
 
-```bash
+没有家宽上游时可以继续准备依赖、网站和证书，但不能交付四条可用线路。向使用者获取真实上游，不编造地址或凭据。
+
+## 3. 申请证书
+
+使用独立 Certbot 环境：
+
+~~~bash
 python3 -m venv /opt/naive-certbot
 /opt/naive-certbot/bin/pip install --upgrade 'certbot>=5.4,<6'
 /opt/naive-certbot/bin/certbot --version
-```
+~~~
 
-IP 证书所需参数与版本见 [Let's Encrypt 的 Certbot 指南](https://letsencrypt.org/2026/03/11/shorter-certs-certbot/)。IP 证书有效期约 160 小时，自动续期必须能长期工作。[证书有效期说明](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability/)
+以下两条路线只选一条。证书名统一为 naiveproxy；存在同名证书时先确认归属。
 
-## 3. 申请证书：只选一种
+**没有域名，用公网 IPv4：**
 
-先确认 TCP 80 空闲且公网可以访问。证书名称统一使用 `naiveproxy`；如果 `/etc/letsencrypt/live/naiveproxy` 已存在，先检查它是否就是本次要使用的证书，不要覆盖别的站点。
-
-**A. 没有域名：使用 VPS 公网 IPv4**
-
-```bash
+~~~bash
 /opt/naive-certbot/bin/certbot certonly \
   --standalone --non-interactive --agree-tos --email you@example.com \
   --preferred-challenges http --preferred-profile shortlived --required-profile shortlived \
   --ip-address 203.0.113.10 --cert-name naiveproxy --key-type ecdsa
-```
+~~~
 
-**B. 有域名：使用自己的域名**
+**有域名：**
 
-```bash
+~~~bash
 /opt/naive-certbot/bin/certbot certonly \
   --standalone --non-interactive --agree-tos --email you@example.com \
   --preferred-challenges http -d proxy.example.com \
   --cert-name naiveproxy --key-type ecdsa
-```
+~~~
 
-以上命令会接受 Let's Encrypt 的服务条款并申请正式证书。若需要先排查验证链路，用独立的 `--cert-name naiveproxy-staging --staging` 测试；测试证书不受公众信任，不能用于最终客户端连接。
+命令会接受 Let's Encrypt 服务条款并申请正式证书。IP 证书有效期约 160 小时，依赖可靠续期；参考 [Certbot IP 证书指南](https://letsencrypt.org/2026/03/11/shorter-certs-certbot/) 和 [有效期说明](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability/)。排查 ACME 时可用独立证书名配合 --staging；测试证书不能用于正式连接。
 
-检查正式证书：
-
-```bash
+~~~bash
 openssl x509 -in /etc/letsencrypt/live/naiveproxy/cert.pem -noout -issuer -dates -ext subjectAltName
 openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt \
   -untrusted /etc/letsencrypt/live/naiveproxy/chain.pem \
   /etc/letsencrypt/live/naiveproxy/cert.pem
-```
+~~~
 
-## 4. 生成自己的账号
+## 4. 生成每个客户端的四节点订阅
 
-`--host` 必须与证书中的 IPv4 或域名一致。下面展示五个人；只有自己用就保留 `friend1` 即可。
+--host 必须对应证书身份；域名路线换成自己的域名。数量按实际需要，下例是五个客户端：
 
-```bash
+~~~bash
 cd /root/NaiveProxy
 python3 scripts/configure.py init --host 203.0.113.10 \
   --users friend1 friend2 friend3 friend4 friend5
+~~~
+
+编辑私有文件 private/settings.json，把 residential_upstream 从 null 改成已验证的本机桥，例如：
+
+~~~json
+"socks5://bridge:你自己生成的桥密码@127.0.0.1:28400"
+~~~
+
+这行表示字段的值，并非完整 JSON 文件。桥用户名/密码含特殊字符时需 URL 编码。不要把凭据写进命令行历史；用编辑器修改私有文件。
+
+初始化会给每个客户端生成独立的订阅令牌和四套认证，另外给两个 HY2 服务生成不同的 Salamander 密码。客户端之间必须共享同一入口服务的混淆密码，但认证密码不共用。
+
+~~~bash
 python3 scripts/configure.py render private/settings.json
-```
+~~~
 
-域名路线把 `--host` 改成 `proxy.example.com`。脚本使用系统安全随机源生成不同密码，生成：
+若上游为空、字段有误、凭据使用占位符或输出目录已存在，命令退出；先修正输入，不绕过校验。生成内容：
 
-- `private/settings.json`：账号主文件，保存好，后续修改以它为准。
-- `private/rendered/Caddyfile`：带认证的服务端配置。
-- `private/rendered/clients/`：每个账号的导入链接、官方 Naive SOCKS/HTTP 本地监听配置。
+| 文件/目录 | 用途 |
+| --- | --- |
+| private/settings.json | 私有主配置，更新时保留原令牌与未要求改动的凭据 |
+| private/rendered/Caddyfile | Naive、网站和私人订阅入口 |
+| private/rendered/hy2-direct.json | HY2 直出服务器配置 |
+| private/rendered/hy2-residential.json | HY2 家宽服务器配置 |
+| private/rendered/subscriptions/ | 每个随机令牌对应四节点的 Base64 内容 |
+| private/rendered/clients/friend1/subscription-url.txt | 交给 friend1 的唯一订阅链接 |
+| private/rendered/clients/friend1/nodes.txt | 管理员排障时核对四个节点 |
+| 同一客户端目录内其他 JSON | 官方 Naive/HY2 客户端排障配置 |
 
-默认只创建直出账号，如 `friend1-d`。家宽是[可选扩展](optional-routes.md)，不是免费附送的出口。再次初始化或写入已有输出目录会被拒绝，避免密码意外轮换或留下已停用账号的旧导出。
+启用的客户端恰好有四个节点；停用的客户端不生成订阅。网站目录 site/ 只放公开网页，不能放这些私有文件。
 
-## 5. 安装独立服务
+## 5. 安装三个代理服务
 
-```bash
+~~~bash
 bash scripts/install.sh private/rendered
-systemctl status naiveproxy.service --no-pager
+systemctl status naiveproxy.service naive-hy2@direct.service naive-hy2@residential.service --no-pager
 systemctl list-timers naive-cert-renew.timer --all
-```
+~~~
 
-脚本只接受首次安装，下载固定版本并检查 SHA-256，以独立的 `naiveproxy` 用户运行。配置在 `/etc/naiveproxy`，程序和网页在 `/opt/naiveproxy`。它不安装面板，不调整 BBR，不修改已有代理或防火墙。
+脚本用于全新安装：校验发布包、检查端口、创建专用用户、安装三个代理服务与证书 timer，再应用整个配置包。HY2 实例以非 root 用户运行，但为内置 NAT 规则持有 CAP_NET_ADMIN。不修改面板、SSH 和现有代理；放行安全组/过滤规则仍需按主机现状处理。
 
-默认网站是仓库里的“山间札记”。可以先修改 `site/` 再安装，也可以按运维说明更新部署后的网页。网页目录只放公开内容；**不要放客户端链接、私钥、配置文件或订阅文件**。
+每次发布的运行配置在 /etc/naiveproxy/releases/ 下，current 符号链接指向当前包。后续更新使用 apply.sh；不要重新初始化凭据，也不要重复运行首次安装脚本。
 
-## 6. 从另一台设备验证
+若此 VPS 已安装仓库旧版的单 Naive 服务，首次安装脚本会拒绝覆盖。Codex 应保留旧账号配置和证书，单独规划迁移到 schema 2、增加缺少的家宽/HY2 认证、部署新 unit 并验证回退。不要直接删除现有安装来绕过检查。
 
-不要仅在 VPS 内部测试。先用浏览器打开 `https://你的IP/` 或 `https://你的域名/`，必须没有证书警告，并能打开“关于”页面。
+## 6. 外部验收后再交付
 
-从电脑终端检查（Windows 请用 `curl.exe`）：
+从客户端网络验证网站证书，不能只在 VPS 内访问：
 
-```bash
+~~~bash
 curl --noproxy '*' --fail --show-error https://203.0.113.10/
 curl --noproxy '*' --fail --show-error https://203.0.113.10/about.html
-```
+~~~
 
-然后按[客户端教程](clients.md)启动对应 Naive 客户端：
+给目标客户端添加其 subscription-url.txt 中的单个链接，更新后应显示四个节点。依次选择实际访问，确认两条直出走 VPS，两条家宽走授权家宽出口。用官方排障配置时，可以请求：
 
-```bash
+~~~bash
 curl --noproxy '' --proxy socks5h://127.0.0.1:1080 \
   --connect-timeout 10 --max-time 30 https://www.cloudflare.com/cdn-cgi/trace
-```
+~~~
 
-直出时，返回的 `ip=` 应是 VPS 对外出口（多网卡或 NAT 环境可能与入口 IP 不同）。家宽账号则应是你自己的家宽出口。
+HY2 官方配置的本地 SOCKS 端口分别为 1082/1083。手机或其他客户端不支持完整 Naive 时，不能把只显示两条 HY2 当作完成，详见 [客户端说明](clients.md)。
 
-再复制一个客户端配置，故意改错密码并在不同本地端口启动：代理请求应失败。浏览器能够打开网站不能证明认证代理可用；错误密码能够浏览网页也不代表代理认证通过。
+持续访问 HY2，并用抓包或防火墙计数确认实际更换入口端口；再验证错误认证拒绝、家宽失败不回落、订阅隔离和临时客户端撤销，具体标准见 [Codex 任务书](CODEX-DEPLOY.md)。
 
-最后测试续期：
-
-```bash
+~~~bash
 /opt/naive-certbot/bin/certbot renew --cert-name naiveproxy --dry-run --run-deploy-hooks
-systemctl is-active naiveproxy.service naive-cert-renew.timer
-```
+systemctl is-enabled naiveproxy.service naive-hy2@direct.service naive-hy2@residential.service naive-cert-renew.timer
+~~~
 
-必须完成网站、正确账号、错误账号、出口和续期这几项检查，再把每个人自己的链接发给他。不要分享整个 `private/` 目录。
+全部通过后，每个人只收到自己的一个 HTTPS 订阅链接。不要分享整个 private/ 目录或管理员全部客户端资料。

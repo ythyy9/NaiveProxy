@@ -1,88 +1,106 @@
-# 运维、更新与回退
+# 账号、订阅、续期与回退
 
-## 服务与文件
+## 文件与服务
 
 | 对象 | 位置 / 名称 |
 | --- | --- |
-| Naive 服务 | `naiveproxy.service` |
-| 证书续期 | `naive-cert-renew.timer` / `naive-cert-renew.service` |
-| 服务配置和证书副本 | `/etc/naiveproxy/` |
-| 程序和公开网页 | `/opt/naiveproxy/` |
-| Caddy 私有运行目录 | `/var/lib/naiveproxy/` |
-| Certbot 与证书原件 | `/opt/naive-certbot/`、`/etc/letsencrypt/live/naiveproxy/` |
-| 续期部署钩子 | `/etc/letsencrypt/renewal-hooks/deploy/90-naiveproxy` |
-| 账号主文件、导出 | `/root/NaiveProxy/private/` |
+| Naive、网站、订阅 | naiveproxy.service |
+| HY2 直出 / 家宽 | naive-hy2@direct.service / naive-hy2@residential.service |
+| 证书续期 | naive-cert-renew.timer / naive-cert-renew.service |
+| 当前运行配置包 | /etc/naiveproxy/current → /etc/naiveproxy/releases/bundle.* |
+| 上一成功配置包 | /etc/naiveproxy/previous |
+| 共用证书副本 | /etc/naiveproxy/tls/ |
+| 程序与公开网页 | /opt/naiveproxy/ |
+| 证书原件 | /etc/letsencrypt/live/naiveproxy/ |
+| 续期钩子 | /etc/letsencrypt/renewal-hooks/deploy/90-naiveproxy |
+| 账号主配置和交付文件 | /root/NaiveProxy/private/ |
 
-```bash
-systemctl status naiveproxy.service naive-cert-renew.timer --no-pager
-journalctl -u naiveproxy.service -n 50 --no-pager
+~~~bash
+systemctl status naiveproxy.service naive-hy2@direct.service naive-hy2@residential.service --no-pager
+journalctl -u naiveproxy.service -u naive-hy2@direct.service -u naive-hy2@residential.service -n 50 --no-pager
 journalctl -u naive-cert-renew.service -n 50 --no-pager
-```
+~~~
 
-本教程不开访问日志，并排除 Caddy 的 HTTP 请求错误日志。分享诊断前仍应检查是否带有节点、地址、密码或访问目标。
+不开网站访问日志，并排除 Caddy 的 HTTP 请求错误日志；HY2 只记录 warning 及以上级别。日志仍应在分享前检查是否带有私密数据。
 
-## 账号停用、增删与改密
+## 修改客户端与更新订阅
 
-编辑 `private/settings.json`，将账号的 `enabled` 改成 `false` 即停用；删除记录也可以。密码字段可用 `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` 生成新值后填写。用户名只用字母、数字、下划线和连字符，密码使用脚本生成的 URL-safe 形式。
+以原 private/settings.json 为准。每个 clients 元素就是一个客户端，含 enabled、subscription_token 和四套协议/出口认证。
 
-生成到**新的**目录，验证后替换；不要重新 `init` 覆盖原账号：
+- 停用：将该客户端 enabled 改为 false，会同时撤销订阅与四条认证。
+- 改某一节点密码：只更新对应 naive/hy2 的 direct/residential 密码。
+- 只换订阅链接：生成新的 subscription_token。**只换令牌不会使已导入的节点密码失效**；链接泄露时也要换该客户端的四个密码。
+- 正常维护：保持令牌不变，用户更新原链接即可取得新节点。
+- 新增：按 schema 2 添加完整客户端，所有令牌和密码独立；不要复制别人的凭据。
 
-```bash
+生成密码或订阅令牌：
+
+~~~bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+~~~
+
+编辑后，生成到一个尚不存在的新目录并应用：
+
+~~~bash
 cd /root/NaiveProxy
 python3 scripts/configure.py render private/settings.json --output private/rendered-update
-/opt/naiveproxy/caddy validate --config private/rendered-update/Caddyfile --adapter caddyfile
-cp -a /etc/naiveproxy/Caddyfile /etc/naiveproxy/Caddyfile.previous
-install -o root -g naiveproxy -m 0640 private/rendered-update/Caddyfile /etc/naiveproxy/Caddyfile
-systemctl restart naiveproxy.service
-systemctl is-active naiveproxy.service
-```
+bash scripts/apply.sh private/rendered-update
+~~~
 
-下次更新换一个新的输出目录名。`restart` 会断开现有连接，让被停用账号的旧 HTTP/2 会话也结束；只做温和 reload 不能用来保证立即撤销已有会话。全部账号停用或删空时仍提供网站，不会生成无认证代理。
+下次更新换一个新输出目录。apply 会先验证 Caddy 配置、暂存整个包，再短暂停止三个代理并切换 current，随后启动和检查服务。重启会结束旧 HTTP/2 和 QUIC 会话；只重载网站配置不足以保证账号立即撤销。
 
-如果更新后失败，恢复 `Caddyfile.previous` 再重启。新节点要重新发给相应用户；旧导出文件仍可能带旧密码，自己处理，不要一起分发。
+失败时脚本尝试恢复此前包及此前运行的服务，并保留故障配置供诊断；首次安装没有旧包时停止服务并报错。检查实际状态，不能把“尝试回退”当成“已恢复”。成功后仍需从外部回读订阅并检查受影响节点。
 
-这些账号没有自动到期、流量额度或设备数限制；不要把本教程作为受这些限制的面板账号的旁路。3x-ui 集成边界见[可选扩展](optional-routes.md#3x-ui-账号同步的边界)。
+旧的订阅内容保留在私有历史包里，但公开 /s/ 只读取 current/subscriptions。旧交付目录也可能含旧密码，不能一起分发。上一包仍用于回退；更旧的包可以在不再需要恢复时由管理员核实路径后清理。
+
+## 回退配置
+
+确认 previous 指向需要恢复的成功包，然后：
+
+~~~bash
+readlink -f /etc/naiveproxy/previous
+bash /root/NaiveProxy/scripts/apply.sh /etc/naiveproxy/previous
+~~~
+
+回退恢复的是运行包，私有 settings.json 需要同步恢复对应版本，避免下一次 render 又覆盖回退结果。保存主配置备份属于管理员责任，不把含密码的备份提交 Git。
 
 ## 证书续期
 
-定时器每六小时检查一次是否需要续期。Certbot 成功签发后，钩子验证证书链、有效期和密钥匹配，复制到服务可读目录，再使用 `reload --force` 加载新证书。续期失败通常不立刻中断已有有效证书；持续失败会在证书到期后影响连接。
+定时器每六小时检查一次是否需要续期。成功签发后的钩子验证证书链、有效期和密钥匹配，更新共用证书副本。Naive 使用 reload --force 加载新证书，Hysteria 在新握手时读取证书文件。
 
-```bash
+~~~bash
 /opt/naive-certbot/bin/certbot renew --cert-name naiveproxy --dry-run --run-deploy-hooks
-systemctl start naive-cert-renew.service
 openssl x509 -in /etc/naiveproxy/tls/fullchain.pem -noout -dates
-```
+~~~
 
-`dry-run` 检查 ACME 与钩子流程，不需要替换客户端信任设置。若续期成功但复制或重载失败，修复日志中的问题后手动运行：
+如果已签发但钩子失败，修复后手动重跑：
 
-```bash
+~~~bash
 /etc/letsencrypt/renewal-hooks/deploy/90-naiveproxy
-```
+~~~
 
-不要等待下一次实际签发才重试部署钩子。standalone 续期要求 TCP 80 可达且空闲；后来新增网站占用 80 时，需要把证书流程改为 webroot 并验证续期，而不是临时关掉未知网站。
+不要只等待下一次签发。standalone 验证依赖公网 TCP 80 可达且空闲；以后新增网站占用 80 时，需要正式改为 webroot 等验证方式并重新验证续期。IP 短期证书不适合长期忽略续期失败。
 
-## 更新网页或软件
+## 家宽、UDP 与额度
 
-公开网页可直接替换 `/opt/naiveproxy/site/` 中的 HTML，无需重启。使用自己的真实内容，保持链接有效；不要在页面上展示管理接口和代理凭据。
+家宽桥需独立维护。HY2 家宽默认 disable_udp=true，因为常见本机桥只转发 TCP；只有验证整条上游链支持 UDP 后才改为 false。HY2 的外层传输一直使用 UDP，这个字段只控制被代理应用的 UDP 转发。Naive 两个节点始终是 TCP 代理。
 
-升级服务端先阅读上游发布说明，下载并核对新版本摘要，保留旧二进制，再用新二进制执行 `validate`。通过后在维护时间替换并重启，再验证网站、认证和实际代理。不要反复运行只适用于首次安装的 `install.sh`。
+本套件没有到期、流量、IP、设备数量限制，也不会自动计入 3x-ui。不能作为受限面板账号的无限制旁路；需要这些功能时按 [面板边界](optional-routes.md#面板与授权边界)单独实现和验证。
 
-客户端保持跟随上游稳定版本，避免长期停留在旧 Chromium 网络特征；升级后重新检查可用性。
+## 更新和停用
 
-## 停用和恢复
+网页可替换 /opt/naiveproxy/site/ 下的公开 HTML，无需重启。升级程序先核对官方发布、摘要和兼容性，保留旧二进制，验证后替换并重启受影响服务。
 
-只停用本教程的服务：
+只停用本套件：
 
-```bash
-systemctl disable --now naive-cert-renew.timer naiveproxy.service
-```
+~~~bash
+systemctl disable --now naive-cert-renew.timer naiveproxy.service naive-hy2@direct.service naive-hy2@residential.service
+~~~
 
-配置、证书和程序保留，可恢复：
+HY2 正常停止时移除自己创建的跳跃规则；核对规则，不清空整张防火墙。配置和证书保留，可恢复：
 
-```bash
-systemctl enable --now naive-cert-renew.timer naiveproxy.service
-```
+~~~bash
+systemctl enable --now naive-cert-renew.timer naiveproxy.service naive-hy2@direct.service naive-hy2@residential.service
+~~~
 
-若要彻底卸载，先保存 `private/settings.json` 和仍需要的证书，再检查上表中的文件归属。只删除本教程创建的服务、钩子和目录；不要清理整个 `/etc/letsencrypt`、其他 Caddy 或面板文件。证书删除可使用 Certbot 的 `delete --cert-name naiveproxy`，确认没有其他服务共用它后再执行。
-
-首次安装若中途失败，脚本保留已有新文件并报错。先查失败位置：程序是否下载、服务用户是否已创建、证书是否有效、unit 是否安装。对于已完整安装但启动失败的情况，修复后 `systemctl restart naiveproxy`；若准备重新安装，先按上表核实并移开本次创建的残留文件和服务用户，不要强制绕过“已有安装”的检查。
+卸载时只处理表中已核实归属的目录、服务和钩子。不要删除整套 /etc/letsencrypt、其他 Caddy、面板或未知家宽桥。首次安装中断时先检查残留与日志，不能靠强制删除全部配置制造“全新环境”。

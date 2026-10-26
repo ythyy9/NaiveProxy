@@ -93,14 +93,14 @@ class Bridge(socketserver.BaseRequestHandler):
                 sock.sendall(chunk)
 
 
-def h2_tunnel(context, server_port, origin_port, username):
+def h2_tunnel(context, server_port, origin_port, username, password=PASSWORD):
     context.set_alpn_protocols(["h2"])
     with socket.create_connection(("127.0.0.1", server_port), timeout=5) as tcp:
         with context.wrap_socket(tcp, server_hostname="127.0.0.1") as tls:
             assert tls.selected_alpn_protocol() == "h2"
             conn = H2Connection(config=H2Configuration(client_side=True, header_encoding="utf-8", validate_outbound_headers=False))
             conn.initiate_connection()
-            auth = base64.b64encode(f"{username}:{PASSWORD}".encode()).decode()
+            auth = base64.b64encode(f"{username}:{password}".encode()).decode()
             conn.send_headers(1, [(":method", "CONNECT"), (":authority", f"127.0.0.1:{origin_port}"),
                                   ("proxy-authorization", "Basic " + auth), ("padding", "test-padding-header-1234567890")])
             tls.sendall(conn.data_to_send())
@@ -159,11 +159,12 @@ def main():
         bridge.origin_port, bridge.hits = origin.server_port, 0
         for server in (origin, bridge):
             threading.Thread(target=server.serve_forever, daemon=True).start()
-        settings = {"host": "127.0.0.1", "residential_upstream": f"socks5://bridge:test-bridge-password@127.0.0.1:{bridge.server_address[1]}",
-                    "accounts": [{"username": name, "password": PASSWORD, "enabled": True, "route": route}
-                                 for name, route in (("alice-d", "direct"), ("alice-r", "residential"))]}
+        settings = configure.new_settings("127.0.0.1", ["alice", "bob"])
+        settings["residential_upstream"] = f"socks5://bridge:test-bridge-password@127.0.0.1:{bridge.server_address[1]}"
+        configure.export(settings, work / "rendered")
         server_port = port()
-        config = configure.render_config(settings, port=server_port, admin="off", cert=cert, key=key, site=ROOT / "site")
+        config = configure.render_config(settings, port=server_port, admin="off", cert=cert, key=key,
+                                         site=ROOT / "site", subscriptions=work / "rendered/subscriptions")
         config = config.replace("            hide_ip", "            acl {\n                allow 127.0.0.1/32\n            }\n            hide_ip")
         path = work / "Caddyfile"
         path.write_text(config)
@@ -192,11 +193,30 @@ def main():
                     else:
                         assert not 200 <= response.status < 300 and response.status != 407
                     connection.close()
-                h2_tunnel(context, server_port, origin.server_port, "alice-d")
+                for client in settings["clients"]:
+                    connection = http.client.HTTPSConnection("127.0.0.1", server_port, context=context, timeout=5)
+                    connection.request("GET", "/s/" + client["subscription_token"])
+                    response = connection.getresponse()
+                    assert response.status == 200 and response.getheader("Cache-Control") == "no-store"
+                    nodes = base64.b64decode(response.read()).decode().splitlines()
+                    assert nodes == configure.node_links(settings, client)
+                    assert len(nodes) == 4
+                    other = next(c for c in settings["clients"] if c != client)
+                    assert other["naive"]["direct"]["password"] not in "\n".join(nodes)
+                    connection.close()
+                for path in ("/s/" + "x" * 43, "/s/", "/s/../Caddyfile", "/settings.json"):
+                    connection = http.client.HTTPSConnection("127.0.0.1", server_port, context=context, timeout=5)
+                    connection.request("GET", path)
+                    response = connection.getresponse()
+                    assert response.status == 404, (path, response.status)
+                    connection.close()
+                direct = settings["clients"][0]["naive"]["direct"]
+                residential = settings["clients"][0]["naive"]["residential"]
+                h2_tunnel(context, server_port, origin.server_port, direct["username"], direct["password"])
                 assert bridge.hits == 0, "Direct traffic entered the residential bridge"
-                h2_tunnel(context, server_port, origin.server_port, "alice-r")
+                h2_tunnel(context, server_port, origin.server_port, residential["username"], residential["password"])
                 assert bridge.hits == 1, "Residential traffic bypassed its bridge"
-                print("PASS: website, TLS verification, unauthenticated/wrong-auth denial, HTTP/2, bidirectional padding, direct/residential routing")
+                print("PASS: website, private four-node subscriptions, TLS, authentication, HTTP/2 padding, direct/residential routing")
             finally:
                 process.terminate()
                 process.wait(timeout=10)

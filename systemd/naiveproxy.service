@@ -6,8 +6,8 @@ After=network-online.target
 [Service]
 User=naiveproxy
 Group=naiveproxy
-ExecStart=/opt/naiveproxy/caddy run --config /etc/naiveproxy/Caddyfile --adapter caddyfile
-ExecReload=/opt/naiveproxy/caddy reload --force --config /etc/naiveproxy/Caddyfile --adapter caddyfile
+ExecStart=/opt/naiveproxy/caddy run --config /etc/naiveproxy/current/Caddyfile --adapter caddyfile
+ExecReload=/opt/naiveproxy/caddy reload --force --config /etc/naiveproxy/current/Caddyfile --adapter caddyfile
 Restart=on-failure
 RestartSec=3
 StateDirectory=naiveproxy
