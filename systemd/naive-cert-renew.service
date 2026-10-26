@@ -1,0 +1,9 @@
+[Unit]
+Description=Renew the certificate used by NaiveProxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/opt/naive-certbot/bin/certbot renew --quiet --cert-name naiveproxy
