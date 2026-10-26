@@ -118,14 +118,15 @@ def h2_tunnel(context, server_port, origin_port, username):
                         received_headers = True
                         request = b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
                         frame = len(request).to_bytes(2, "big") + b"\x07" + request + bytes(7)
-                        conn.send_data(1, frame)
+                        # This single-request test has no more upload data.
+                        conn.send_data(1, frame, end_stream=True)
                     elif isinstance(event, DataReceived):
                         padded.extend(event.data)
                         conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
                     elif isinstance(event, StreamEnded):
                         ended = True
                     elif isinstance(event, StreamReset):
-                        raise AssertionError("HTTP/2 stream reset")
+                        raise AssertionError(f"HTTP/2 stream reset: {event.error_code}, received {len(padded)} bytes")
                 pending = conn.data_to_send()
                 if pending:
                     tls.sendall(pending)
