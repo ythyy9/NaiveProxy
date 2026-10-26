@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Generate private Naive settings and exports; never contact or alter a VPS."""
+"""Generate one private HTTPS subscription with four nodes per client."""
 import argparse
+import base64
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import secrets
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
+
+ROUTES = ("direct", "residential")
+PROTOCOLS = ("naive", "hy2")
+LABELS = {"direct": "直出", "residential": "家宽"}
+TLS_ROOT = "/etc/naiveproxy/tls"
+CURRENT = "/etc/naiveproxy/current"
 
 
 def host_value(value):
@@ -18,71 +25,176 @@ def host_value(value):
     except ValueError:
         labels = value.split(".")
         if len(labels) < 2 or any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", x) for x in labels):
-            raise ValueError("Use a domain name or IPv4 address, without scheme or port")
+            raise ValueError("Use a domain or IPv4 address without scheme or port")
         return value.lower()
     if address.version != 4:
-        raise ValueError("This guide's installer supports IPv4 or a domain name")
+        raise ValueError("The installer supports IPv4 or a domain resolving to IPv4")
     return str(address)
 
 
 def token(value, password=False):
     pattern = r"[A-Za-z0-9._~-]{20,128}" if password else r"[A-Za-z0-9_-]{1,48}"
     if not isinstance(value, str) or not re.fullmatch(pattern, value) or value.startswith("REPLACE_"):
-        raise ValueError("Use a simple account name and a generated URL-safe password (20+ characters)")
+        raise ValueError("Use simple account names and generated URL-safe passwords of 20+ characters")
     return value
 
 
-def validate(settings):
+def upstream_parts(value):
+    if not isinstance(value, str):
+        raise ValueError("Set residential_upstream to your verified local authenticated SOCKS5 bridge")
+    p = urlsplit(value)
+    if (p.scheme != "socks5" or p.hostname != "127.0.0.1" or not p.port
+            or not p.username or not p.password or p.path or p.query or p.fragment
+            or any(c in value for c in "\r\n\t{}\"\\")):
+        raise ValueError("residential_upstream must be an authenticated socks5:// URL at 127.0.0.1")
+    username, password = unquote(p.username), unquote(p.password)
+    if any(ord(c) < 32 or ord(c) == 127 for c in username + password):
+        raise ValueError("Invalid bridge credentials")
+    if username.startswith("REPLACE_") or password.startswith("REPLACE_"):
+        raise ValueError("Replace the bridge placeholders before rendering")
+    return p.hostname, p.port, username, password
+
+
+def validate(settings, require_upstream=True):
+    if settings.get("schema") != 2:
+        raise ValueError("Expected schema 2; preserve live credentials when migrating")
     host_value(settings["host"])
-    accounts = settings["accounts"]
-    if not isinstance(accounts, list):
-        raise ValueError("accounts must be a list; an empty list serves only the website")
-    seen = set()
-    upstream = settings.get("residential_upstream")
-    if upstream is not None:
-        # SOCKS5 is plaintext: only a separately secured, local bridge is accepted.
-        p = urlsplit(upstream)
-        if (p.scheme != "socks5" or p.hostname != "127.0.0.1" or not p.port
-                or not p.username or not p.password or p.path or p.query or p.fragment
-                or any(c in upstream for c in "\r\n\t{}\"\\")):
-            raise ValueError("residential_upstream must be an authenticated socks5:// URL at 127.0.0.1")
-    for account in accounts:
-        name = token(account["username"])
-        token(account["password"], password=True)
-        if name in seen:
-            raise ValueError("Duplicate username")
-        seen.add(name)
-        if account["route"] not in ("direct", "residential"):
-            raise ValueError("Unknown route")
-        if type(account["enabled"]) is not bool:
+    if require_upstream or settings.get("residential_upstream") is not None:
+        upstream_parts(settings.get("residential_upstream"))
+    ranges = []
+    for route in ROUTES:
+        options = settings["hy2"][route]
+        start, end = options["port_start"], options["port_end"]
+        if type(start) is not int or type(end) is not int or not 1024 < start < end <= 65535 or end - start > 255:
+            raise ValueError("HY2 needs 2-256 high UDP ports per non-overlapping range")
+        ranges.append(set(range(start, end + 1)))
+        token(options["obfs_password"], password=True)
+        if type(options["disable_udp"]) is not bool:
+            raise ValueError("disable_udp must be true or false")
+    if ranges[0] & ranges[1]:
+        raise ValueError("HY2 port ranges overlap")
+    if not isinstance(settings["clients"], list):
+        raise ValueError("clients must be a list")
+    ids, tokens, usernames = set(), set(), set()
+    for client in settings["clients"]:
+        name = token(client["id"])
+        bearer = client["subscription_token"]
+        if not isinstance(bearer, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", bearer):
+            raise ValueError("Use a subscription token generated by secrets.token_urlsafe(32)")
+        if name in ids or bearer in tokens:
+            raise ValueError("Duplicate client ID or subscription token")
+        ids.add(name)
+        tokens.add(bearer)
+        if type(client["enabled"]) is not bool:
             raise ValueError("enabled must be true or false")
-        if account["route"] == "residential" and account["enabled"] and not upstream:
-            raise ValueError("An enabled residential account needs a local SOCKS bridge")
+        for protocol in PROTOCOLS:
+            for route in ROUTES:
+                credential = client[protocol][route]
+                username = token(credential["username"])
+                token(credential["password"], password=True)
+                if username in usernames:
+                    raise ValueError("Duplicate node username")
+                usernames.add(username)
     return settings
 
 
+def new_settings(host, users):
+    names = [token(name) for name in users]
+    if len(set(names)) != len(names):
+        raise ValueError("Duplicate client ID")
+    data = {"schema": 2, "host": host_value(host), "residential_upstream": None,
+            "hy2": {route: {"port_start": start, "port_end": start + 31,
+                            "obfs_password": secrets.token_urlsafe(32),
+                            "disable_udp": route == "residential"}
+                    for route, start in zip(ROUTES, (28000, 28100))}, "clients": []}
+    for name in names:
+        client = {"id": name, "enabled": True, "subscription_token": secrets.token_urlsafe(32)}
+        for protocol in PROTOCOLS:
+            client[protocol] = {route: {"username": f"{name}-{protocol[0]}-{route[0]}",
+                                       "password": secrets.token_urlsafe(32)} for route in ROUTES}
+        data["clients"].append(client)
+    return validate(data, require_upstream=False)
+
+
 def render_config(settings, *, port=443, admin="127.0.0.1:20190",
-                  cert="/etc/naiveproxy/tls/fullchain.pem",
-                  key="/etc/naiveproxy/tls/privkey.pem", site="/opt/naiveproxy/site"):
+                  cert=TLS_ROOT + "/fullchain.pem", key=TLS_ROOT + "/privkey.pem",
+                  site="/opt/naiveproxy/site", subscriptions=CURRENT + "/subscriptions"):
     validate(settings)
     q = json.dumps
-    lines = ["{", f"    admin {admin}", "    auto_https off",
-             "    servers {", "        protocols h1 h2", "    }",
-             "    log {", "        exclude http.log.error", "    }", "}", "",
-             f":{port} {{", f"    tls {q(str(cert))} {q(str(key))}", "    route {"]
+    lines = ["{", f"    admin {admin}", "    auto_https off", "    servers {",
+             "        protocols h1 h2", "    }", "    log {", "        exclude http.log.error",
+             "    }", "}", "", f":{port} {{", f"    tls {q(str(cert))} {q(str(key))}", "    route {"]
     for route in ("residential", "direct"):
-        accounts = [a for a in settings["accounts"] if a["enabled"] and a["route"] == route]
-        if not accounts:
-            continue  # An empty forward_proxy block would be an unauthenticated proxy.
+        credentials = [c["naive"][route] for c in settings["clients"] if c["enabled"]]
+        if not credentials:
+            continue  # Never create an empty, unauthenticated forward_proxy.
         lines.append("        forward_proxy {")
-        for a in accounts:
-            lines.append(f'            basic_auth {q(a["username"])} {q(a["password"])}')
+        for credential in credentials:
+            lines.append(f'            basic_auth {q(credential["username"])} {q(credential["password"])}')
         lines.extend(["            hide_ip", "            hide_via", "            probe_resistance"])
         if route == "residential":
             lines.append("            upstream " + q(settings["residential_upstream"]))
         lines.append("        }")
-    lines.extend([f"        root * {q(str(site))}", "        file_server", "    }", "}", ""])
+    lines.extend(["        handle_path /s/* {", f"            root * {q(str(subscriptions))}",
+                  '            header Cache-Control "no-store"',
+                  '            header Content-Type "text/plain; charset=utf-8"',
+                  "            file_server", "        }",
+                  "        handle {", f"            root * {q(str(site))}",
+                  "            file_server", "        }", "    }", "}", ""])
     return "\n".join(lines)
+
+
+def render_hy2(settings, route, *, cert=TLS_ROOT + "/fullchain.pem", key=TLS_ROOT + "/privkey.pem"):
+    validate(settings)
+    options = settings["hy2"][route]
+    credentials = {c["hy2"][route]["username"]: c["hy2"][route]["password"]
+                   for c in settings["clients"] if c["enabled"]}
+    # An empty userpass map is invalid upstream. This unexported random credential
+    # keeps an all-disabled service running while rejecting every previous client.
+    auth = {"type": "userpass", "userpass": credentials} if credentials else {
+        "type": "password", "password": secrets.token_urlsafe(48)}
+    outbound = {"name": "exit", "type": "direct", "direct": {"mode": 4}}
+    if route == "residential":
+        host, port, username, password = upstream_parts(settings["residential_upstream"])
+        outbound = {"name": "exit", "type": "socks5", "socks5": {
+            "addr": f"{host}:{port}", "username": username, "password": password}}
+    return {"listen": f'0.0.0.0:{options["port_start"]}-{options["port_end"]}',
+            "tls": {"cert": str(cert), "key": str(key)}, "auth": auth,
+            "obfs": {"type": "salamander", "salamander": {"password": options["obfs_password"]}},
+            "disableUDP": options["disable_udp"], "outbounds": [outbound],
+            "acl": {"inline": [f"reject({network})" for network in (
+                "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+                "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
+                "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8")] + ["exit(all)"]}}
+
+
+def node_links(settings, client):
+    links = []
+    for protocol in PROTOCOLS:
+        for route in ROUTES:
+            credential = client[protocol][route]
+            auth = quote(credential["username"], safe="") + ":" + quote(credential["password"], safe="")
+            label = quote(f'{client["id"]}-{"Naive" if protocol == "naive" else "HY2"}-{LABELS[route]}', safe="")
+            if protocol == "naive":
+                links.append(f'naive+https://{auth}@{settings["host"]}:443#{label}')
+            else:
+                options = settings["hy2"][route]
+                query = urlencode({"sni": settings["host"], "insecure": "0", "obfs": "salamander",
+                                   "obfs-password": options["obfs_password"],
+                                   "mport": f'{options["port_start"]}-{options["port_end"]}'})
+                # Numeric base port + mport is the v2rayN import convention.
+                links.append(f'hysteria2://{auth}@{settings["host"]}:{options["port_start"]}/?{query}#{label}')
+    return links
+
+
+def hy2_client(settings, client, route):
+    options, credential = settings["hy2"][route], client["hy2"][route]
+    return {"server": f'{settings["host"]}:{options["port_start"]}-{options["port_end"]}',
+            "auth": credential["username"] + ":" + credential["password"],
+            "tls": {"sni": settings["host"], "insecure": False},
+            "obfs": {"type": "salamander", "salamander": {"password": options["obfs_password"]}},
+            "transport": {"type": "udp", "udp": {"hopInterval": "30s"}},
+            "socks5": {"listen": "127.0.0.1:" + ("1082" if route == "direct" else "1083")}}
 
 
 def write_private(path, text):
@@ -92,34 +204,37 @@ def write_private(path, text):
 
 
 def initialize(host, users, output):
-    names = [token(name) for name in users]
-    if len(set(names)) != len(names):
-        raise ValueError("Duplicate user name")
-    data = {"host": host_value(host), "residential_upstream": None, "accounts": [
-        {"username": name + "-d", "password": secrets.token_urlsafe(32),
-         "route": "direct", "enabled": True} for name in names]}
-    validate(data)
+    data = new_settings(host, users)
     output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     write_private(output, json.dumps(data, indent=2) + "\n")
 
 
 def export(settings, output):
     validate(settings)
-    # Refuse to leave stale exports behind when an account is disabled or deleted.
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
     write_private(output / "Caddyfile", render_config(settings))
     write_private(output / "public-host", host_value(settings["host"]) + "\n")
-    clients = output / "clients"
+    for route in ROUTES:
+        write_private(output / f"hy2-{route}.json", json.dumps(render_hy2(settings, route), indent=2) + "\n")
+    subscriptions, clients = output / "subscriptions", output / "clients"
+    subscriptions.mkdir(mode=0o700)
     clients.mkdir(mode=0o700)
-    for account in settings["accounts"]:
-        if not account["enabled"]:
+    for client in settings["clients"]:
+        if not client["enabled"]:
             continue
-        name = account["username"]
-        authority = f'{quote(name, safe="")}:{quote(account["password"], safe="")}@{host_value(settings["host"])}:443'
-        write_private(clients / f"{name}.txt", f"naive+https://{authority}#{quote(name)}\n")
-        for protocol, port in (("socks", 1080), ("http", 1081)):
-            config = {"listen": f"{protocol}://127.0.0.1:{port}", "proxy": "https://" + authority}
-            write_private(clients / f"{name}-{protocol}.json", json.dumps(config, indent=2) + "\n")
+        directory = clients / client["id"]
+        directory.mkdir(mode=0o700)
+        body = "\n".join(node_links(settings, client)) + "\n"
+        write_private(subscriptions / client["subscription_token"], base64.b64encode(body.encode()).decode() + "\n")
+        write_private(directory / "subscription-url.txt", f'https://{settings["host"]}/s/{client["subscription_token"]}\n')
+        write_private(directory / "nodes.txt", body)
+        for route in ROUTES:
+            credential = client["naive"][route]
+            proxy = f'https://{quote(credential["username"], safe="")}:{quote(credential["password"], safe="")}@{settings["host"]}:443'
+            for protocol, port in (("socks", 1080), ("http", 1081)):
+                data = {"listen": f"{protocol}://127.0.0.1:{port}", "proxy": proxy}
+                write_private(directory / f"naive-{route}-{protocol}.json", json.dumps(data, indent=2) + "\n")
+            write_private(directory / f"hy2-{route}.json", json.dumps(hy2_client(settings, client, route), indent=2) + "\n")
 
 
 def main():
@@ -140,7 +255,7 @@ def main():
         else:
             export(json.loads(args.settings.read_text(encoding="utf-8")), args.output)
     except (ValueError, KeyError, TypeError, OSError) as error:
-        parser.exit(1, f"Configuration failed ({type(error).__name__}); check the input and use a new output path.\n")
+        parser.exit(1, f"Configuration failed ({type(error).__name__}); check schema, local bridge and output path.\n")
     print(f"Created {args.output}; contains credentials, keep private.")
 
 

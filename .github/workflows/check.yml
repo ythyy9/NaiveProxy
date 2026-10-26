@@ -18,4 +18,7 @@ jobs:
       - run: for file in scripts/*.sh; do bash -n "$file" || exit; done
       - run: python -m pip install 'h2>=4.3,<5'
       - run: mkdir .ci && bash scripts/download-server.sh .ci/caddy
+      - run: bash scripts/download-hy2.sh .ci/hysteria
       - run: python tests/smoke.py .ci/caddy
+      - run: python tests/smoke_hy2.py .ci/hysteria
+      - run: sudo env GITHUB_ACTIONS=true bash tests/install-smoke.sh
