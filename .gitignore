@@ -1,50 +1,11 @@
-# Sensitive live and historical client/server material. Keep it local even when
-# the remote repository is private.
-/private-configs/
-/PHASE4_*/
-/guiNConfig.json
-/direct-network-diagnostic-*.txt
-/windows-proxy-before-*.reg
-/edge-policy-backup-*.reg
-/v2rayN-*-release.json
-/.codex-*
-
-# Never track server-side exports or common secret material here.
-*.db
-*.sqlite
-*.sqlite3
-*.tar
-*.tar.gz
-*.zip
-*.7z
-*.iso
-*.vdi
-*.vbox
-*.vbox-prev
-*.nvram
-*.sav
-*.viso
+/private/
+/.ci/
+__pycache__/
+*.pyc
+*.log
 *.pem
 *.key
-*.p12
-*.pfx
-id_*
-known_hosts
-authorized_keys
 .env
-.env.*
-
-# Local operational noise.
-*.log
-*.log.*
-*.tmp
-*.swp
-Thumbs.db
+*.db
+*.sqlite*
 .DS_Store
-
-# This is an independent nested Git repository; do not embed it accidentally
-# in the parent second-brain repository.
-/hk-traffic-monitor/
-
-# Tool-local workspace state.
-/.agents/

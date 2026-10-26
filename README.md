@@ -1,68 +1,51 @@
----
-title: 代理服务器搭建档案
-type: project
-status: reference
-updated: 2026-09-03
-tags:
-  - server
-  - proxy
-  - x-ui
-  - sing-box
-  - vless
-  - reality
----
+# NaiveProxy：HTTPS 网站 + 私人代理部署指南
 
-# 代理服务器搭建档案
+给朋友从零配置 VPS 的中文教程。主线是 **NaiveProxy + HTTPS / HTTP/2 + 正常静态网站**：浏览器访问显示网页，持有账号的 Naive 客户端通过同一个 TCP 443 端口连接。
 
-> [!important] 最新交接入口
-> 先阅读 [双节点代理项目交接（2026-09-03）](HANDOFF_20260903.md)。本页及 `docs/` 中部分内容是 2026-07 的历史快照，不能替代交接文件中的当前状态。
-
-这个目录用于保留此前搭建代理服务器、调试客户端链路和监控中转流量的资料；当前链路是“日本软银中转 → 美国家宽落地”，服务器管理面板使用 x-ui。[Source: User, 当前对话, 2026-07-18]
-
-```mermaid
-flowchart LR
-  A["客户端<br/>sing-box TUN"] --> B["日本软银中转"]
-  B --> C["美国住宅网络落地"]
-  C --> D["互联网"]
-```
-
-> [!warning] 敏感资料
-> `private-configs/` 内是可直接用于接入的完整客户端配置，包含端点、VLESS UUID 和 Reality 参数。不要公开、提交到父级 Git 仓库或直接分享；根目录的 `.gitignore` 只能降低误提交风险，不能阻止 Obsidian/网盘同步，也不提供加密。[Source: 本地配置安全审计, 2026-07-18]
-
-## 一分钟结论
-
-- 现有 16 份历史配置全部是 **sing-box 客户端侧** 配置，不是 x-ui 服务端备份；它们能说明客户端怎么连入口节点，却不能还原日本中转到美国家宽的第二跳。[Source: 本地配置结构审计, 2026-07-18]
-- 最新且最完整的候选配置是 `private-configs/04-jp-softbank-us-lineage/latest-candidate/wangbin-1dbki5bk.json`；它使用 gVisor TUN、XUDP、DNS 劫持及国内直连规则，但是否仍在生产使用需要去客户端或 x-ui 面板确认。[Source: 该配置文件与文件修改时间, 2026-07-17；结论为推断]
-- `hk-traffic-monitor/` 是香港中转时期的独立 Git 项目；其数据最后更新于 2026-06-27，当前应视为历史项目或失效监控，除非另行确认香港节点仍在使用。[Source: hk-traffic-monitor/data/traffic.json 与 Git 历史, 2026-07-18]
-- 当前目录没有 x-ui 数据库/导出、服务端 Xray 配置、SSH 资料、防火墙规则或第二跳实现，因此仅凭这些文件无法重建现网。[Source: 本地文件清单审计, 2026-07-18]
-
-## 从哪里开始看
-
-1. [当前架构与已知缺口](docs/01-当前架构.md) — 先理解现在的链路，以及哪些信息还没有留下。
-2. [配置演变时间线](docs/02-配置演变时间线.md) — 看 2026-06 到 2026-07 做过哪些测试和迁移。
-3. [文件索引](docs/03-文件索引.md) — 查每个配置的用途、关系和状态。
-4. [安全与恢复边界](docs/04-安全与恢复边界.md) — 明确哪些文件不能公开，以及当前为何不能完整恢复服务器。
-5. [接管信息模板](docs/05-接管信息模板.md) — 下次登录服务器时逐项补齐。
-
-## 目录结构
+这里是部署材料，不是 NaiveProxy 的上游源码。客户端使用 [klzgrad/naiveproxy](https://github.com/klzgrad/naiveproxy)，服务端使用其指定的 [klzgrad/forwardproxy `naive` 分支](https://github.com/klzgrad/forwardproxy/tree/naive)。普通发行版 Caddy 通常没有这个模块。
 
 ```text
-服务器/
-├─ README.md                         # 本页
-├─ docs/                             # 脱敏后的架构、历史、索引和接管说明
-├─ private-configs/                  # 敏感原始 sing-box 配置
-│  ├─ 01-us-hk-relay-tests/         # 美国家宽直连 / 香港中转对照
-│  ├─ 02-hk-phone-dns-tests/        # 香港手机节点、DNS、UDP、flow 实验
-│  ├─ 03-hk-dmit-alternative/       # 香港 DMIT 备选路径
-│  └─ 04-jp-softbank-us-lineage/    # 日本入口到美国家宽的配置谱系
-└─ hk-traffic-monitor/              # 香港中转流量监控的独立 Git 仓库
+浏览器 ────── HTTPS ───────────→ VPS TCP 443 → 普通网页
+Naive 客户端 ─ HTTPS / HTTP2 ──→ 同一入口
+                                    ├─ 直出账号 → VPS 出口
+                                    └─ 家宽账号 → 本机 SOCKS 桥 → 自备家宽出口（可选）
+HY2 + Salamander + 端口跳跃 ───→ 独立 UDP 入口（可选备用）
 ```
 
-原始文件只做了目录移动，没有改写；移动前后逐文件 SHA-256 校验一致。[Source: 本次整理校验, 2026-07-18]
+## 从哪里开始
 
-## 状态标签
+1. 准备一台 **Debian 12/13 或 Ubuntu 22.04/24.04、x86_64、systemd** 的 VPS；安装脚本限定 Linux x86_64。有旧服务时先看端口占用。
+2. 跟着 [安装教程](docs/installation.md) 完成证书、账号生成、安装和外部验证。**没有域名也可以走 IP 证书路线**。
+3. 根据 [客户端教程](docs/clients.md) 配置 v2rayN、官方 Naive 客户端或小火箭的 HTTPS 兼容模式。
+4. 日常改账号、续期和回退看 [运维说明](docs/operations.md)。家宽出口、HY2 和 3x-ui 的适用条件看 [可选扩展](docs/optional-routes.md)。
 
-- **用户确认**：由你明确说明，可作为当前事实。
-- **文件证实**：能由配置或 Git 历史直接验证。
-- **推断**：根据文件名、结构与时间判断，仍需要登录客户端/服务器确认。
-- **缺失**：本目录没有足够资料，不能猜测。
+无需购买家宽出口也可以使用直出。多用户可在初始化时一起生成，例如 `--users friend1 friend2 friend3 friend4 friend5`；每个账号的密码独立。
+
+## 这套配置做什么
+
+- 服务端启用认证、`hide_ip`、`hide_via`、`probe_resistance` 和 HTTP/2，正常访问返回静态网页。
+- 完整 Naive 客户端使用 Chromium 网络栈并协商 Naive padding；普通 HTTPS 代理兼容模式具有不同的流量特征。[上游设计与填充协议](https://github.com/klzgrad/naiveproxy#padding-protocol-an-informal-specification)
+- TLS 校验始终开启；证书由公开 CA 签发。无域名路线采用 Let's Encrypt 短期 IP 证书，并配置自动续期与证书重载。
+- 生成的配置、链接和密码只存入本机 `private/`，不提交 Git。脚本不修改现有面板、订阅、SSH 或防火墙。
+
+它不是“永不被封”的保证，也不把 Salamander 说成 HTTPS 伪装。Naive 主线提供 TCP 代理；需要 UDP 的应用要另选合适的传输方案。
+
+## 版本与验证范围
+
+服务端基线为 [`v2.11.7-naive2`](https://github.com/klzgrad/forwardproxy/releases/tag/v2.11.7-naive2)，下载脚本检查该发布包的 SHA-256。来源部署曾使用官方 Naive `v154.0.8037.49-5` 和 v2rayN `7.24.9` 验证 HTTP/2、双向填充及直出／家宽线路。这是原部署的验证记录，不代表所有手机或本仓库的每种扩展已经实测。
+
+仓库的 [自动检查](https://github.com/ythyy9/NaiveProxy/actions) 在隔离 Linux 环境运行配置生成测试，并启动真正的服务端，验证网站、证书校验、错误认证拒绝、HTTP/2 双向填充及两种出口路由。它不申请公网证书，也不证明某个运营商线路的实际可达性。新 VPS 仍须完成教程中的外部验收。
+
+客户端应跟随 [上游稳定发布](https://github.com/klzgrad/naiveproxy/releases) 更新；升级服务端时同时核对发布版本、包摘要和配置兼容性。
+
+## 仓库内容
+
+| 目录 | 用途 |
+| --- | --- |
+| `docs/` | 从零安装、客户端、运维和可选扩展 |
+| `scripts/` | 本地配置生成、发布包校验、初次安装、续期钩子 |
+| `systemd/` | 独立服务和证书续期定时器 |
+| `site/` | 可替换的静态网站示例 |
+| `tests/` | 配置与协议验证 |
+
+仓库当前内容已替换旧的个人服务器报告。Git 提交历史保留用于回退；这不等于擦除历史记录。

@@ -1,0 +1,26 @@
+[Unit]
+Description=Naive HTTPS proxy and static website
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=naiveproxy
+Group=naiveproxy
+ExecStart=/opt/naiveproxy/caddy run --config /etc/naiveproxy/Caddyfile --adapter caddyfile
+ExecReload=/opt/naiveproxy/caddy reload --force --config /etc/naiveproxy/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+StateDirectory=naiveproxy
+StateDirectoryMode=0700
+Environment=XDG_DATA_HOME=/var/lib/naiveproxy XDG_CONFIG_HOME=/var/lib/naiveproxy
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
